@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="utf-8">
+  <title>Jarvis 100% local</title>
+</head>
+
+<body style="background-color:#222222">
+  <audio controls autoplay loop style="display:none" id="loadingtrack">
+    <source src="soundtrack.ogg"  type="audio/ogg">
+    <source src="soundtrack.mp3" type="audio/mpeg">
+  </audio>
+
+
+  <select id="grammars" style="font-size:5em"></select>
+  <button id="startBtn" style="font-size:5em">Start</button>
+  <button id="stopBtn" style="font-size:5em">Stop</button>
+  <span id="recording-indicator" style="border-radius: 10px; -moz-border-radius: 10px; -webkit-border-radius: 10px; width: 20px; height: 20px; background: red;"></span>
+  <div id="output" style="height:300px;overflow:none;color:#EEEEEE;font-size:2em;
+    text-align: center;
+    vertical-align: middle;
+    display: flex;
+    justify-content:center;
+    align-content:center;
+    flex-direction:column;">.</div>
+  <canvas id="visualizer" style="width:100%;height:100px;display:block"></canvas>
+  <div id="current-status">Loading page</div>
+
+  <script>
+    // These will be initialized later
+    var recognizer, recorder, callbackManager, audioContext, outputContainer;
+    // Only when both recorder and recognizer do we have a ready application
+    var isRecorderReady = isRecognizerReady = false;
+    console.log('Line 28');
+    // A convenience function to post a message to the recognizer and associate
+    // a callback to its response
+    function postRecognizerJob(message, callback) {
+      var msg = message || {};
+      if (callbackManager) msg.callbackId = callbackManager.add(callback);
+      if (recognizer) recognizer.postMessage(msg);
+    };
+
+    // This function initializes an instance of the recorder
+    // it posts a message right away and calls onReady when it
+    // is ready so that onmessage can be properly set
+    function spawnWorker(workerURL, onReady) {
+      recognizer = new Worker(workerURL);
+      recognizer.onmessage = function (event) {
+        console.log('line 43 recognizer message='.event);
+        onReady(recognizer);
+      };
+      recognizer.postMessage('');
+
+    };
+
+    // To display the hypothesis sent by the recognizer
+    function updateHyp(hyp) {
+      if (outputContainer) outputContainer.innerHTML = hyp;
+    };
+
+    var sayTab = [];
+    function updateSpeek(say) {
+      sayTab.push(say);
+      //120 char ~ 10 mots en 6 secondes -> 1 char par
+      if (outputContainer && sayTab.length==1) {
+        updateProgressiveSpeek(sayTab, 1)
+      }
+    };
+    function updateProgressiveSpeek(sayTab, index) {
+      if(sayTab.length!=0){
+        outputContainer.innerHTML = sayTab[0].substr(0, index);
+        if (sayTab[0].length > index) {
+          setTimeout(function () {
+            updateProgressiveSpeek(sayTab, index + 1);
+          }, 50);
+        }else{
+          sayTab.shift();
+          setTimeout(function () {
+            updateProgressiveSpeek(sayTab,1); 
+          }, 500);
+ 
+        }
+      }
+    };
+
+    // This updates the UI when the app might get ready
+    // Only when both recorder and recognizer are ready do we enable the buttons
+    function updateUI() {
+      if (isRecorderReady && isRecognizerReady) startBtn.disabled = stopBtn.disabled = false;
+    };
+
+    // This is just a logging window where we display the status
+    function updateStatus(newStatus) {
+      document.getElementById('current-status').innerHTML += "<br/>" + newStatus;
+    };
+
+    // A not-so-great recording indicator
+    function displayRecording(display) {
+      if (display) document.getElementById('recording-indicator').innerHTML = "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;";
+      else document.getElementById('recording-indicator').innerHTML = "";
+    };
+
+    // Callback function once the user authorises access to the microphone
+    // in it, we instanciate the recorder
+    function startUserMedia(stream) {
+      var input = audioContext.createMediaStreamSource(stream);
+      // Firefox hack https://support.mozilla.org/en-US/questions/984179
+      window.firefox_audio_hack = input;
+      var audioRecorderConfig = { errorCallback: function (x) { updateStatus("Error from recorder: " + x); } };
+      recorder = new AudioRecorder(input, audioRecorderConfig);
+      // If a recognizer is ready, we pass it to the recorder
+      if (recognizer) recorder.consumers = [recognizer];
+      isRecorderReady = true;
+      updateUI();
+      updateStatus("Audio recorder ready");
+    };
+
+    // This starts recording. We first need to get the id of the grammar to use
+    var startRecording = function () {
+      var id = document.getElementById('grammars').value;
+      if (recorder && recorder.start(id)) displayRecording(true);
+    };
+
+    // Stops recording
+    var stopRecording = function () {
+      recorder && recorder.stop();
+      displayRecording(false);
+    };
+
+    // Called once the recognizer is ready
+    // We then add the grammars to the input select tag and update the UI
+    var recognizerReady = function () {
+      updateGrammars();
+      isRecognizerReady = true;
+      updateUI();
+      updateStatus("Recognizer ready");
+      updateSpeek("Appuyez sur Start et dites:\"Jarvis lève le bras droit\"");
+      document.getElementById('loadingtrack').pause();
+    };
+
+    // We get the grammars defined below and fill in the input select tag
+    var updateGrammars = function () {
+      var selectTag = document.getElementById('grammars');
+      for (var i = 0; i < grammarIds.length; i++) {
+        var newElt = document.createElement('option');
+        newElt.value = grammarIds[i].id;
+        newElt.innerHTML = grammarIds[i].title;
+        selectTag.appendChild(newElt);
+      }
+    };
+
+    // This adds a grammar from the grammars array
+    // We add them one by one and call it again as
+    // a callback.
+    // Once we are done adding all grammars, we can call
+    // recognizerReady()
+    var feedGrammar = function (g, index, id) {
+      if (id && (grammarIds.length > 0)) grammarIds[0].id = id.id;
+      if (index < g.length) {
+        grammarIds.unshift({ title: g[index].title })
+        postRecognizerJob({ command: 'addGrammar', data: g[index].g },
+          function (id) { feedGrammar(grammars, index + 1, { id: id }); });
+      } else {
+        recognizerReady();
+      }
+    };
+
+    // This adds words to the recognizer. When it calls back, we add grammars
+    var feedWords = function (words) {
+      postRecognizerJob({ command: 'addWords', data: words },
+        function () { feedGrammar(grammars, 0); });
+    };
+
+    // This initializes the recognizer. When it calls back, we add words
+    var initRecognizer = function () {
+      // You can pass parameters to the recognizer, such as : {command: 'initialize', data: [["-hmm", "my_model"], ["-fwdflat", "no"]]},["-kws_threshold", "1e-25"]
+      postRecognizerJob({ command: 'initialize', data: [["-hmm", "cmusphinx-fr-ptm-5.2"], ["-fwdflat", "no"]] },
+        function () {
+          if (recorder) recorder.consumers = [recognizer];
+          feedWords(wordList);
+        });
+    };
+
+    // When the page is loaded, we spawn a new recognizer worker and call getUserMedia to
+    // request access to the microphone
+    window.onload = function () {
+      // The following is to initialize Web Audio
+      try {
+        window.AudioContext = window.AudioContext || window.webkitAudioContext;
+        navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+        window.URL = window.URL || window.webkitURL;
+        audioContext = new AudioContext();
+      } catch (e) {
+        updateStatus("Error initializing Web Audio browser");
+      }
+
+      outputContainer = document.getElementById("output");
+      visualize(audioContext, document.getElementById('visualizer'));
+
+      //http://espeak.sourceforge.net/ssml.html
+      updateSpeek("Bonjour, je suis jarvis une application web qui interagit vocalement.");
+      var aa =speakNow("Bonjour, je suis jarviss <break strength='strong' />  une application ouaib qui interagit vocalement.",
+        function () {
+          updateSpeek("Merci de monter le son et activer le microphone.");
+          speakNow("Merci de monter le son et activer le microphone.",
+            function () {
+
+            });
+        });
+
+      meSpeak.loadConfig("mespeak_config.json");
+      meSpeak.loadVoice("voices/fr.json", function () {
+        updateStatus("Voice loaded");
+        document.getElementById('loadingtrack').volume = 0.1;
+        //document.getElementById('loadingtrack').pause();
+      });
+
+
+
+      updateStatus("Initializing web audio and speech recognizer, waiting for approval to access the microphone");
+      callbackManager = new CallbackManager();
+      spawnWorker("js/recognizer.js", function (worker) {
+        // This is the onmessage function, once the worker is fully loaded
+        worker.onmessage = function (e) {
+          // This is the case when we have a callback id to be called
+          if (e.data.hasOwnProperty('id')) {
+            var clb = callbackManager.get(e.data['id']);
+            var data = {};
+            if (e.data.hasOwnProperty('data')) data = e.data.data;
+            if (clb) clb(data);
+          }
+          // This is a case when the recognizer has a new hypothesis
+          if (e.data.hasOwnProperty('hyp')) {
+            var newHyp = e.data.hyp;
+            if (e.data.hasOwnProperty('final') && e.data.final){
+              //newHyp = "Final: " + newHyp;
+              startRecording();
+            } 
+            updateHyp(newHyp);
+          }
+          // This is the case when we have an error
+          if (e.data.hasOwnProperty('status') && (e.data.status == "error")) {
+            updateStatus("Error in " + e.data.command + " with code " + e.data.code);
+          }
+        };
+        // Once the worker is fully loaded, we can call the initialize function
+        initRecognizer();
+      });
+
+      if (navigator.getUserMedia) navigator.getUserMedia({ audio: true }, startUserMedia, function (e) {
+        updateStatus("No live audio input in this browser");
+      });
+      else updateStatus("No web audio support in this browser");
+
+      go_lazy();
+      // Wiring JavaScript to the UI
+      var startBtn = document.getElementById('startBtn');
+      var stopBtn = document.getElementById('stopBtn');
+      startBtn.disabled = true;
+      stopBtn.disabled = true;
+      startBtn.onclick = startRecording;
+      stopBtn.onclick = stopRecording;
+    };
+
+    // This is the list of words that need to be added to the recognizer
+    // This follows the CMU dictionary format
+    //var wordList = [["JARVIS", "JH AA R V AH S"],["JARVIS(2)", "JH AA R V AH S"]];
+    var wordList = [
+      ["un", "un"]
+      , ["deux", "dd eu"]
+      , ["trois", "tt rr ww aa"]
+      , ["trois(2)", "tt rr ww aa zz"]
+      , ["quatre", "kk aa tt rr"]
+      , ["quatre(2)", "kk aa tt rr ee"]
+      , ["cinq", "ss in"]
+      , ["cinq(2)", "ss in kk"]
+      , ["six", "ss ii"]
+      , ["six(2)", "ss ii ss"]
+      , ["six(3)", "ss ii zz"]
+      , ["sept", "ss ai tt"]
+      , ["huit", "uy ii"]
+      , ["huit(2)", "uy ii tt"]
+      , ["neuf", "nn eu ff"]
+      , ["neuf(2)", "nn oe ff"]
+      , ["zero", "zz ei rr au"]
+      , ["jarvis", "jj aa rr vv ii"]
+      , ["jarvis(2)", "jj aa rr vv ii zz"]
+      , ["tourne", "tt ou rr nn"]
+      , ["tourne(2)", "tt ou rr nn ee"]
+      , ["leve", "ll ai vv"]
+      , ["leve(2)", "ll ai vv ee"]
+      , ["baisse", "bb ai ss"]
+      , ["baisse(2)", "bb ai ss ee"]
+      , ["allume", "aa ll uu mm"]
+      , ["allume(2)", "aa ll uu mm ee"]
+      , ["bras", "bb rr aa"]
+      , ["bras(2)", "bb rr aa ss"]
+      , ["bras(3)", "bb rr aa zz"]
+      , ["yeux", "yy eu"]
+      , ["yeux(2)", "yy eu zz"]
+      , ["tete", "tt ai tt"]
+      , ["tete(2)", "tt ai tt ee"]
+      , ["droit", "bb rr aa zz"]
+      , ["droit(2)", "dd rr ww aa tt"]
+      , ["droit(3)", "dd rr ww aa tt ee"]
+      , ["gauche", "gg au ch"]
+      , ["gauche(2)", "gg au ch ee"]
+    ];
+
+    // This grammar recognizes digits
+    var grammarDigits = {
+      numStates: 1, start: 0, end: 0, transitions: [
+        { from: 0, to: 0, word: "un" }
+        , { from: 0, to: 0, word: "deux" }
+        , { from: 0, to: 0, word: "trois" }
+        , { from: 0, to: 0, word: "quatre" }
+        , { from: 0, to: 0, word: "cinq" }
+        , { from: 0, to: 0, word: "six" }
+        , { from: 0, to: 0, word: "sept" }
+        , { from: 0, to: 0, word: "huit" }
+        , { from: 0, to: 0, word: "neuf" }
+        , { from: 0, to: 0, word: "zero" }
+        , { from: 0, to: 0, word: "jarvis" }
+      ]
+    };
+
+    // This grammar recognizes digits
+    var grammarFakeJarvis = {
+      numStates: 1, start: 0, end: 0, transitions: [
+        { from: 0, to: 0, word: "jarvis" }
+      ]
+    };
+
+
+    var grammarIronMan = {
+      numStates: 5, start: 0, end: 6, transitions: [
+        { from: 0, to: 1, word: "jarvis" }
+        , { from: 1, to: 2, word: "baisse" }
+        , { from: 1, to: 2, word: "leve" }
+        , { from: 1, to: 2, word: "tourne" }
+        , { from: 1, to: 2, word: "allume" }
+        , { from: 2, to: 3, word: "bras" }
+        , { from: 2, to: 3, word: "tete" }
+        , { from: 3, to: 4, word: "droit" }
+        , { from: 3, to: 4, word: "gauche" }
+      ]
+    };
+
+
+
+
+    var grammars = [{ title: "Digits", g: grammarDigits }, { title: "Jarvis", g: grammarFakeJarvis }, { title: "IronMan", g: grammarIronMan }];
+    var grammarIds = [];
+
+    function go_lazy() {
+      console.log('Inside go_lazy');
+      postRecognizerJob({
+        command: 'lazyLoad',
+        data: {          
+folders: [["/", "cmusphinx-fr-ptm-5.2"]],
+          files: [
+            ["/cmusphinx-fr-ptm-5.2", "means", "../cmusphinx-fr-ptm-5.2/means"],
+            ["/cmusphinx-fr-ptm-5.2", "variances", "../cmusphinx-fr-ptm-5.2/variances"],
+            ["/cmusphinx-fr-ptm-5.2", "transition_matrices", "../cmusphinx-fr-ptm-5.2/transition_matrices"],
+            // ["/cmusphinx-fr-ptm-5.2", "sendump", "../cmusphinx-fr-ptm-5.2/sendump"],
+            ["/cmusphinx-fr-ptm-5.2", "mdef", "../cmusphinx-fr-ptm-5.2/mdef"],
+            ["/cmusphinx-fr-ptm-5.2", "feat.params", "../cmusphinx-fr-ptm-5.2/feat.params"],
+            ["/cmusphinx-fr-ptm-5.2", "mixture_weights", "../cmusphinx-fr-ptm-5.2/mixture_weights"],
+            ["/cmusphinx-fr-ptm-5.2", "noisedict", "../cmusphinx-fr-ptm-5.2/noisedict"]]        
+}
+      }
+        ,
+        function () {
+          console.log('Lazy Callback worked');
+        });
+
+
+    }  //End go_lazy
+  </script>
+  <script type="text/javascript">
+          function speakNow(text, myCallback) {
+            return meSpeak.speak(text, {
+              //amplitude: 100,
+              //wordgap: 0,
+              //pitch: 150,//50
+              //speed: 175,//175
+              //variant: "",
+              ssml: true
+            }, myCallback);
+          };
+  </script>
+  <script type="text/javascript" src="js/mespeak.js"></script>
+  <!-- These are the two JavaScript files you must load in the HTML,
+    The recognizer is loaded through a Web Worker -->
+  <script src="js/audioRecorder.js"></script>
+  <script src="js/callbackManager.js"></script>
+  <script src="js/vizualizer.js"></script>
+</body>
+
+</html>
