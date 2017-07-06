@@ -14,8 +14,8 @@
 
 
   <select id="grammars" style="font-size:5em"></select>
-  <button id="startBtn" style="font-size:5em">Start</button>
-  <button id="stopBtn" style="font-size:5em">Stop</button>
+  <button id="startBtn" style="font-size:5em;visibility:hidden">Start</button>
+  <button id="stopBtn" style="font-size:5em">Retry</button>
   <span id="recording-indicator" style="border-radius: 10px; -moz-border-radius: 10px; -webkit-border-radius: 10px; width: 20px; height: 20px; background: red;"></span>
   <div id="output" style="height:300px;overflow:none;color:#EEEEEE;font-size:2em;
     text-align: center;
@@ -135,7 +135,8 @@
       isRecognizerReady = true;
       updateUI();
       updateStatus("Recognizer ready");
-      updateSpeek("Appuyez sur Start et dites:\"Jarvis lève le bras droit\"");
+      updateHyp("Exemple de commande:\"Jarvis lève le bras droit\"");
+      startRecording();
       document.getElementById('loadingtrack').pause();
     };
 
@@ -175,7 +176,7 @@
     // This initializes the recognizer. When it calls back, we add words
     var initRecognizer = function () {
       // You can pass parameters to the recognizer, such as : {command: 'initialize', data: [["-hmm", "my_model"], ["-fwdflat", "no"]]},["-kws_threshold", "1e-25"]
-      postRecognizerJob({ command: 'initialize', data: [["-hmm", "cmusphinx-fr-ptm-5.2"], ["-fwdflat", "no"]] },
+      postRecognizerJob({ command: 'initialize', data: [["-hmm", "cmusphinx-fr-ptm-5.2"], ["-fwdflat", "no"],["-kws_threshold", "2"]] },
         function () {
           if (recorder) recorder.consumers = [recognizer];
           feedWords(wordList);
